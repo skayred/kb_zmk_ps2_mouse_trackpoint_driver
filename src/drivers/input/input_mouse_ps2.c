@@ -330,7 +330,7 @@ static int on_activity_state_changed(const zmk_event_t *eh) {
     case ZMK_ACTIVITY_IDLE:
     case ZMK_ACTIVITY_SLEEP:
         LOG_INF("Keyboard is sleeping!");
-        disable_my_hardware();
+        //disable_my_hardware();
         break;
     }
 

@@ -324,13 +324,13 @@ static int on_activity_state_changed(const zmk_event_t *eh) {
 
     switch (ev->state) {
     case ZMK_ACTIVITY_ACTIVE:
-        LOG_INF("Keyboard is active!");
-        //enable_my_hardware();
+        LOG_INF("Keyboard is sleeping, enablding PS2 reporting");
+        zmk_mouse_ps2_activity_reporting_enable();
         break;
     case ZMK_ACTIVITY_IDLE:
     case ZMK_ACTIVITY_SLEEP:
-        LOG_INF("Keyboard is sleeping!");
-        //disable_my_hardware();
+        LOG_INF("Keyboard is sleeping, disabling PS2 reporting");
+        zmk_mouse_ps2_activity_reporting_disable();
         break;
     }
 

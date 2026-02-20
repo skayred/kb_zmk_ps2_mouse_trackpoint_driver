@@ -27,7 +27,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
  */
 
 // Delay mouse init to give the mouse time to send the init sequence.
-#define ZMK_MOUSE_PS2_INIT_THREAD_DELAY_MS 1000
+#define ZMK_MOUSE_PS2_INIT_THREAD_DELAY_MS 2000
 
 // How often the driver try to initialize a mouse before we give up.
 #define MOUSE_PS2_INIT_ATTEMPTS 10
@@ -1695,16 +1695,46 @@ static void zmk_mouse_ps2_init_thread(int dev_ptr, int unused) {
         if (config->tp_sensitivity != -1) {
             LOG_INF("Setting TP sensitivity to %d...", config->tp_sensitivity);
             zmk_mouse_ps2_tp_sensitivity_set(config->tp_sensitivity);
+
+            uint8_t actual_sensitivity;
+            if (zmk_mouse_ps2_tp_sensitivity_get(&actual_sensitivity) == 0) {
+                if (actual_sensitivity != config->tp_sensitivity) {
+                    LOG_WRN("TP sensitivity readback mismatch: expected %d, got %d. Retrying...",
+                            config->tp_sensitivity, actual_sensitivity);
+                    k_msleep(100);
+                    zmk_mouse_ps2_tp_sensitivity_set(config->tp_sensitivity);
+                }
+            }
         }
 
         if (config->tp_neg_inertia != -1) {
             LOG_INF("Setting TP inertia to %d...", config->tp_neg_inertia);
             zmk_mouse_ps2_tp_neg_inertia_set(config->tp_neg_inertia);
+
+            uint8_t actual_neg_inertia;
+            if (zmk_mouse_ps2_tp_negative_inertia_get(&actual_neg_inertia) == 0) {
+                if (actual_neg_inertia != config->tp_neg_inertia) {
+                    LOG_WRN("TP neg inertia readback mismatch: expected %d, got %d. Retrying...",
+                            config->tp_neg_inertia, actual_neg_inertia);
+                    k_msleep(100);
+                    zmk_mouse_ps2_tp_neg_inertia_set(config->tp_neg_inertia);
+                }
+            }
         }
 
         if (config->tp_val6_upper_speed != -1) {
             LOG_INF("Setting TP value 6 upper speed plateau to %d...", config->tp_val6_upper_speed);
             zmk_mouse_ps2_tp_value6_upper_plateau_speed_set(config->tp_val6_upper_speed);
+
+            uint8_t actual_val6;
+            if (zmk_mouse_ps2_tp_value6_upper_plateau_speed_get(&actual_val6) == 0) {
+                if (actual_val6 != config->tp_val6_upper_speed) {
+                    LOG_WRN("TP value6 readback mismatch: expected %d, got %d. Retrying...",
+                            config->tp_val6_upper_speed, actual_val6);
+                    k_msleep(100);
+                    zmk_mouse_ps2_tp_value6_upper_plateau_speed_set(config->tp_val6_upper_speed);
+                }
+            }
         }
         if (config->tp_x_invert) {
             LOG_INF("Inverting trackpoint x axis.");

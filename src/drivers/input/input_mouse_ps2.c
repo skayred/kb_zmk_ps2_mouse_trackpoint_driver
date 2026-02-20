@@ -14,9 +14,11 @@
 #include <zephyr/drivers/ps2.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/input/input.h>
-#include <zephyr/logging/log.h>
+#include <zephyr/logging/log.h
 #include <zephyr/settings/settings.h>
 #include <zephyr/sys/util.h>
+#include <zmk/event_manager.h>
+#include <zmk/events/activity_state_changed.h>
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
@@ -89,7 +91,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define MOUSE_PS2_CMD_TP_SET_SENSITIVITY_RESP_LEN 0
 #define MOUSE_PS2_CMD_TP_SET_SENSITIVITY_MIN 0
 #define MOUSE_PS2_CMD_TP_SET_SENSITIVITY_MAX 255
-#define MOUSE_PS2_CMD_TP_SET_SENSITIVITY_DEFAULT 128
+#define MOUSE_PS2_CMD_TP_SET_SENSITIVITY_DEFAULT 255
 
 #define MOUSE_PS2_ST_TP_NEG_INERTIA "tp_neg_inertia"
 #define MOUSE_PS2_CMD_TP_GET_NEG_INERTIA "\xe2\x80\x4d"
@@ -109,7 +111,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define MOUSE_PS2_CMD_TP_SET_VALUE6_UPPER_PLATEAU_SPEED_RESP_LEN 0
 #define MOUSE_PS2_CMD_TP_SET_VALUE6_UPPER_PLATEAU_SPEED_MIN 0
 #define MOUSE_PS2_CMD_TP_SET_VALUE6_UPPER_PLATEAU_SPEED_MAX 255
-#define MOUSE_PS2_CMD_TP_SET_VALUE6_UPPER_PLATEAU_SPEED_DEFAULT 0x61
+#define MOUSE_PS2_CMD_TP_SET_VALUE6_UPPER_PLATEAU_SPEED_DEFAULT 0x81
 
 #define MOUSE_PS2_ST_TP_PTS_THRESHOLD "tp_pts_threshold"
 #define MOUSE_PS2_CMD_TP_GET_PTS_THRESHOLD "\xe2\x80\x5c"
@@ -119,7 +121,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define MOUSE_PS2_CMD_TP_SET_PTS_THRESHOLD_RESP_LEN 0
 #define MOUSE_PS2_CMD_TP_SET_PTS_THRESHOLD_MIN 0
 #define MOUSE_PS2_CMD_TP_SET_PTS_THRESHOLD_MAX 255
-#define MOUSE_PS2_CMD_TP_SET_PTS_THRESHOLD_DEFAULT 0x08
+#define MOUSE_PS2_CMD_TP_SET_PTS_THRESHOLD_DEFAULT 0x06
 
 // Trackpoint Config Bits
 #define MOUSE_PS2_TP_CONFIG_BIT_PRESS_TO_SELECT 0x00
@@ -315,6 +317,28 @@ zmk_mouse_ps2_activity_parse_packet_buffer(zmk_mouse_ps2_packet_mode packet_mode
                                            uint8_t packet_state, uint8_t packet_x, uint8_t packet_y,
                                            uint8_t packet_extra);
 void zmk_mouse_ps2_activity_toggle_layer();
+
+// Power saving stuff
+static int on_activity_state_changed(const zmk_event_t *eh) {
+    const struct zmk_activity_state_changed *ev = as_zmk_activity_state_changed(eh);
+
+    switch (ev->state) {
+    case ZMK_ACTIVITY_ACTIVE:
+        LOG_INF("Keyboard is active!");
+        //enable_my_hardware();
+        break;
+    case ZMK_ACTIVITY_IDLE:
+    case ZMK_ACTIVITY_SLEEP:
+        LOG_INF("Keyboard is sleeping!");
+        disable_my_hardware();
+        break;
+    }
+
+    return 0;
+}
+
+ZMK_LISTENER(my_driver, on_activity_state_changed);
+ZMK_SUBSCRIPTION(my_driver, zmk_activity_state_changed);
 
 // Called by the PS/2 driver whenver the mouse sends a byte and
 // reporting is enabled through `zmk_mouse_ps2_activity_reporting_enable`.

@@ -135,11 +135,13 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 // samdis - disable force sampling (saves power)
 // RAM address 0x20, bit 4 (0x10)
+// E2 47 20 10 toggles samdis (no argument byte)
+// E2 80 20 reads the byte at 0x20 (bit 4 = samdis)
 #define MOUSE_PS2_CMD_TP_GET_SAMDIS "\xe2\x80\x20"
 #define MOUSE_PS2_CMD_TP_GET_SAMDIS_RESP_LEN 1
 
-#define MOUSE_PS2_CMD_TP_SET_SAMDIS "\xe2\x81\x20"
-#define MOUSE_PS2_CMD_TP_SET_SAMDIS_RESP_LEN 0
+#define MOUSE_PS2_CMD_TP_TOGGLE_SAMDIS "\xe2\x47\x20\x10"
+#define MOUSE_PS2_CMD_TP_TOGGLE_SAMDIS_RESP_LEN 0
 
 #define MOUSE_PS2_TP_SAMDIS_BIT 4
 
@@ -1191,31 +1193,31 @@ int zmk_mouse_ps2_tp_swap_xy_set(bool enabled) {
 }
 
 int zmk_mouse_ps2_tp_set_samdis(bool disable) {
-    // Read current value at RAM address 0x20
-    uint8_t reg_val;
-    struct zmk_mouse_ps2_send_cmd_resp resp = zmk_mouse_ps2_send_cmd(
+    struct zmk_mouse_ps2_send_cmd_resp resp;
+
+    // Read current samdis state
+    resp = zmk_mouse_ps2_send_cmd(
         MOUSE_PS2_CMD_TP_GET_SAMDIS, sizeof(MOUSE_PS2_CMD_TP_GET_SAMDIS), NULL,
         MOUSE_PS2_CMD_TP_GET_SAMDIS_RESP_LEN, true);
     if (resp.err) {
         LOG_ERR("Could not read samdis register: %d", resp.err);
         return resp.err;
     }
-    reg_val = resp.resp_buffer[0];
 
-    // Check if already in desired state
-    bool is_disabled = MOUSE_PS2_GET_BIT(reg_val, MOUSE_PS2_TP_SAMDIS_BIT);
-    if (is_disabled == disable) {
-        LOG_DBG("samdis already %s, skipping", disable ? "set" : "cleared");
+    bool current = MOUSE_PS2_GET_BIT(resp.resp_buffer[0], MOUSE_PS2_TP_SAMDIS_BIT);
+    LOG_INF("samdis before toggle: %d (want %d)", current, disable);
+
+    if (current == disable) {
+        LOG_INF("samdis already %s, skipping", disable ? "set" : "cleared");
         return 0;
     }
 
-    // Set/clear the bit and write
-    MOUSE_PS2_SET_BIT(reg_val, disable, MOUSE_PS2_TP_SAMDIS_BIT);
+    // Toggle samdis via E2 47 20 10 (no argument byte)
     resp = zmk_mouse_ps2_send_cmd(
-        MOUSE_PS2_CMD_TP_SET_SAMDIS, sizeof(MOUSE_PS2_CMD_TP_SET_SAMDIS), &reg_val,
-        MOUSE_PS2_CMD_TP_SET_SAMDIS_RESP_LEN, true);
+        MOUSE_PS2_CMD_TP_TOGGLE_SAMDIS, sizeof(MOUSE_PS2_CMD_TP_TOGGLE_SAMDIS), NULL,
+        MOUSE_PS2_CMD_TP_TOGGLE_SAMDIS_RESP_LEN, true);
     if (resp.err) {
-        LOG_ERR("Could not write samdis register: %d", resp.err);
+        LOG_ERR("Could not toggle samdis: %d", resp.err);
         return resp.err;
     }
 
@@ -1228,9 +1230,11 @@ int zmk_mouse_ps2_tp_set_samdis(bool disable) {
         return resp.err;
     }
 
-    bool verified = MOUSE_PS2_GET_BIT(resp.resp_buffer[0], MOUSE_PS2_TP_SAMDIS_BIT);
-    if (verified != disable) {
-        LOG_ERR("samdis verification failed: expected %d, got %d", disable, verified);
+    bool after = MOUSE_PS2_GET_BIT(resp.resp_buffer[0], MOUSE_PS2_TP_SAMDIS_BIT);
+    LOG_INF("samdis after toggle: %d", after);
+
+    if (after != disable) {
+        LOG_ERR("samdis verification failed: expected %d, got %d", disable, after);
         return -EIO;
     }
 

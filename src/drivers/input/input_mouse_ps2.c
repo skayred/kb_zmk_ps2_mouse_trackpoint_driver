@@ -27,7 +27,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
  */
 
 // Delay mouse init to give the mouse time to send the init sequence.
-#define ZMK_MOUSE_PS2_INIT_THREAD_DELAY_MS 2000
+#define ZMK_MOUSE_PS2_INIT_THREAD_DELAY_MS 1000
 
 // How often the driver try to initialize a mouse before we give up.
 #define MOUSE_PS2_INIT_ATTEMPTS 10
@@ -132,6 +132,16 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #define MOUSE_PS2_TP_CONFIG_BIT_INVERT_Z 0x05
 #define MOUSE_PS2_TP_CONFIG_BIT_SWAP_XY 0x06
 #define MOUSE_PS2_TP_CONFIG_BIT_FORCE_TRANSPARENT 0x07
+
+// samdis - disable force sampling (saves power)
+// RAM address 0x20, bit 4 (0x10)
+#define MOUSE_PS2_CMD_TP_GET_SAMDIS "\xe2\x80\x20"
+#define MOUSE_PS2_CMD_TP_GET_SAMDIS_RESP_LEN 1
+
+#define MOUSE_PS2_CMD_TP_SET_SAMDIS "\xe2\x81\x20"
+#define MOUSE_PS2_CMD_TP_SET_SAMDIS_RESP_LEN 0
+
+#define MOUSE_PS2_TP_SAMDIS_BIT 4
 
 // Responses
 #define MOUSE_PS2_RESP_SELF_TEST_PASS 0xaa
@@ -317,6 +327,7 @@ zmk_mouse_ps2_activity_parse_packet_buffer(zmk_mouse_ps2_packet_mode packet_mode
                                            uint8_t packet_state, uint8_t packet_x, uint8_t packet_y,
                                            uint8_t packet_extra);
 void zmk_mouse_ps2_activity_toggle_layer();
+int zmk_mouse_ps2_tp_set_samdis(bool disable);
 
 // Power saving stuff
 static int on_activity_state_changed(const zmk_event_t *eh) {
@@ -324,13 +335,15 @@ static int on_activity_state_changed(const zmk_event_t *eh) {
 
     switch (ev->state) {
     case ZMK_ACTIVITY_ACTIVE:
-        LOG_INF("Keyboard is sleeping, enablding PS2 reporting");
+        LOG_INF("Resuming PS2: clearing samdis, enabling reporting");
+        zmk_mouse_ps2_tp_set_samdis(false);
         zmk_mouse_ps2_activity_reporting_enable();
         break;
     case ZMK_ACTIVITY_IDLE:
     case ZMK_ACTIVITY_SLEEP:
-        LOG_INF("Keyboard is sleeping, disabling PS2 reporting");
+        LOG_INF("Suspending PS2: disabling reporting, setting samdis");
         zmk_mouse_ps2_activity_reporting_disable();
+        zmk_mouse_ps2_tp_set_samdis(true);
         break;
     }
 
@@ -1177,6 +1190,54 @@ int zmk_mouse_ps2_tp_swap_xy_set(bool enabled) {
     return err;
 }
 
+int zmk_mouse_ps2_tp_set_samdis(bool disable) {
+    // Read current value at RAM address 0x20
+    uint8_t reg_val;
+    struct zmk_mouse_ps2_send_cmd_resp resp = zmk_mouse_ps2_send_cmd(
+        MOUSE_PS2_CMD_TP_GET_SAMDIS, sizeof(MOUSE_PS2_CMD_TP_GET_SAMDIS), NULL,
+        MOUSE_PS2_CMD_TP_GET_SAMDIS_RESP_LEN, true);
+    if (resp.err) {
+        LOG_ERR("Could not read samdis register: %d", resp.err);
+        return resp.err;
+    }
+    reg_val = resp.resp_buffer[0];
+
+    // Check if already in desired state
+    bool is_disabled = MOUSE_PS2_GET_BIT(reg_val, MOUSE_PS2_TP_SAMDIS_BIT);
+    if (is_disabled == disable) {
+        LOG_DBG("samdis already %s, skipping", disable ? "set" : "cleared");
+        return 0;
+    }
+
+    // Set/clear the bit and write
+    MOUSE_PS2_SET_BIT(reg_val, disable, MOUSE_PS2_TP_SAMDIS_BIT);
+    resp = zmk_mouse_ps2_send_cmd(
+        MOUSE_PS2_CMD_TP_SET_SAMDIS, sizeof(MOUSE_PS2_CMD_TP_SET_SAMDIS), &reg_val,
+        MOUSE_PS2_CMD_TP_SET_SAMDIS_RESP_LEN, true);
+    if (resp.err) {
+        LOG_ERR("Could not write samdis register: %d", resp.err);
+        return resp.err;
+    }
+
+    // Read back and verify
+    resp = zmk_mouse_ps2_send_cmd(
+        MOUSE_PS2_CMD_TP_GET_SAMDIS, sizeof(MOUSE_PS2_CMD_TP_GET_SAMDIS), NULL,
+        MOUSE_PS2_CMD_TP_GET_SAMDIS_RESP_LEN, true);
+    if (resp.err) {
+        LOG_ERR("Could not verify samdis register: %d", resp.err);
+        return resp.err;
+    }
+
+    bool verified = MOUSE_PS2_GET_BIT(resp.resp_buffer[0], MOUSE_PS2_TP_SAMDIS_BIT);
+    if (verified != disable) {
+        LOG_ERR("samdis verification failed: expected %d, got %d", disable, verified);
+        return -EIO;
+    }
+
+    LOG_INF("Successfully %s force sampling (samdis)", disable ? "disabled" : "enabled");
+    return 0;
+}
+
 int zmk_mouse_ps2_tp_sensitivity_get(uint8_t *sensitivity) {
     struct zmk_mouse_ps2_send_cmd_resp resp = zmk_mouse_ps2_send_cmd(
         MOUSE_PS2_CMD_TP_GET_SENSITIVITY, sizeof(MOUSE_PS2_CMD_TP_GET_SENSITIVITY), NULL,
@@ -1695,46 +1756,16 @@ static void zmk_mouse_ps2_init_thread(int dev_ptr, int unused) {
         if (config->tp_sensitivity != -1) {
             LOG_INF("Setting TP sensitivity to %d...", config->tp_sensitivity);
             zmk_mouse_ps2_tp_sensitivity_set(config->tp_sensitivity);
-
-            uint8_t actual_sensitivity;
-            if (zmk_mouse_ps2_tp_sensitivity_get(&actual_sensitivity) == 0) {
-                if (actual_sensitivity != config->tp_sensitivity) {
-                    LOG_WRN("TP sensitivity readback mismatch: expected %d, got %d. Retrying...",
-                            config->tp_sensitivity, actual_sensitivity);
-                    k_msleep(100);
-                    zmk_mouse_ps2_tp_sensitivity_set(config->tp_sensitivity);
-                }
-            }
         }
 
         if (config->tp_neg_inertia != -1) {
             LOG_INF("Setting TP inertia to %d...", config->tp_neg_inertia);
             zmk_mouse_ps2_tp_neg_inertia_set(config->tp_neg_inertia);
-
-            uint8_t actual_neg_inertia;
-            if (zmk_mouse_ps2_tp_negative_inertia_get(&actual_neg_inertia) == 0) {
-                if (actual_neg_inertia != config->tp_neg_inertia) {
-                    LOG_WRN("TP neg inertia readback mismatch: expected %d, got %d. Retrying...",
-                            config->tp_neg_inertia, actual_neg_inertia);
-                    k_msleep(100);
-                    zmk_mouse_ps2_tp_neg_inertia_set(config->tp_neg_inertia);
-                }
-            }
         }
 
         if (config->tp_val6_upper_speed != -1) {
             LOG_INF("Setting TP value 6 upper speed plateau to %d...", config->tp_val6_upper_speed);
             zmk_mouse_ps2_tp_value6_upper_plateau_speed_set(config->tp_val6_upper_speed);
-
-            uint8_t actual_val6;
-            if (zmk_mouse_ps2_tp_value6_upper_plateau_speed_get(&actual_val6) == 0) {
-                if (actual_val6 != config->tp_val6_upper_speed) {
-                    LOG_WRN("TP value6 readback mismatch: expected %d, got %d. Retrying...",
-                            config->tp_val6_upper_speed, actual_val6);
-                    k_msleep(100);
-                    zmk_mouse_ps2_tp_value6_upper_plateau_speed_set(config->tp_val6_upper_speed);
-                }
-            }
         }
         if (config->tp_x_invert) {
             LOG_INF("Inverting trackpoint x axis.");

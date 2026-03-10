@@ -31,6 +31,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 // How often the driver try to initialize a mouse before we give up.
 #define MOUSE_PS2_INIT_ATTEMPTS 10
+#define MOUSE_PS2_SAMDIS_ATTEMPTS 10
 
 // Mouse activity packets are at least three bytes.
 // This defines how much time between bytes can pass before
@@ -336,11 +337,25 @@ static int on_activity_state_changed(const zmk_event_t *eh) {
     const struct zmk_activity_state_changed *ev = as_zmk_activity_state_changed(eh);
 
     switch (ev->state) {
-    case ZMK_ACTIVITY_ACTIVE:
+    case ZMK_ACTIVITY_ACTIVE: {
         LOG_INF("Resuming PS2: clearing samdis, enabling reporting");
-        zmk_mouse_ps2_tp_set_samdis(false);
+        int samdis_err = 0;
+        for (int attempt = 1; attempt <= MOUSE_PS2_SAMDIS_ATTEMPTS; attempt++) {
+            samdis_err = zmk_mouse_ps2_tp_set_samdis(false);
+            if (samdis_err == 0) {
+                break;
+            }
+            LOG_WRN("samdis clear failed (attempt %d/%d, err %d), retrying...",
+                     attempt, MOUSE_PS2_SAMDIS_ATTEMPTS, samdis_err);
+            k_msleep(50);
+        }
+        if (samdis_err) {
+            LOG_ERR("Failed to clear samdis after %d attempts, trackpoint may not work",
+                     MOUSE_PS2_SAMDIS_ATTEMPTS);
+        }
         zmk_mouse_ps2_activity_reporting_enable();
         break;
+    }
     case ZMK_ACTIVITY_IDLE:
     case ZMK_ACTIVITY_SLEEP:
         LOG_INF("Suspending PS2: disabling reporting, setting samdis");
